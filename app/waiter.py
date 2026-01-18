@@ -1,5 +1,5 @@
 import json
-from db import supabase, call_procedure, execute_sql
+from db import supabase, call_procedure
 
 class Waiter:
     def __init__(self, user_id: int):
@@ -68,10 +68,21 @@ class Waiter:
 
         # 调用结账存储过程
         result = call_procedure("settle_bill", [table_id, discount])
-        if result:
-            total_amount = result[0]["p_total_amount"]
-            print(f"结账成功！桌台：{table_number}，应收金额：{total_amount:.2f}元")
-            return total_amount
+        if result is not None:
+            # 获取结账后的订单总金额
+            order_response = supabase.table("orders")\
+                .select("total_amount")\
+                .eq("table_id", table_id)\
+                .eq("status", "已结账")\
+                .order("created_at", desc=True)\
+                .limit(1)\
+                .single()\
+                .execute()
+            
+            if order_response.data:
+                total_amount = order_response.data["total_amount"]
+                print(f"结账成功！桌台：{table_number}，应收金额：{total_amount:.2f}元")
+                return total_amount
         return -1
 
     def view_table_status(self):

@@ -1,13 +1,7 @@
 from supabase import create_client, Client
 import os
 import json
-
-# Supabase配置（替换为你的实际配置）
-SUPABASE_URL = "https://lkadifukazgphwzkfuez.supabase.co"
-SUPABASE_KEY = "sb_secret_71F1tqMywPNfvbxK9lUj_g_-QMiHOHJ"
-
-# 创建Supabase客户端
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+from db import supabase, call_procedure, get_dish_with_tastes
 
 class Customer:
     def __init__(self, user_id: int):
@@ -106,56 +100,32 @@ class Customer:
     def view_all_dishes(self) -> list:
         """查看所有上架菜品及口味选项"""
         try:
-            # 首先获取所有上架菜品
-            dishes_response = supabase.table("dishes")\
-                .select("dish_id, dish_name, category_id, price, description")\
-                .eq("is_active", True)\
-                .order("sort_order")\
-                .execute()
+            # 使用db.py中的辅助函数
+            dishes = get_dish_with_tastes(None)
             
-            if not dishes_response.data:
+            if not dishes:
                 print("暂无上架菜品")
                 return []
-            
-            result = []
-            for dish in dishes_response.data:
-                # 获取分类名称
-                category_response = supabase.table("dish_categories")\
-                    .select("category_name")\
-                    .eq("category_id", dish["category_id"])\
-                    .single()\
-                    .execute()
-                
-                if category_response.data:
-                    dish["category_name"] = category_response.data["category_name"]
-                else:
-                    dish["category_name"] = "未知分类"
-                
-                # 获取口味选项
-                taste_response = supabase.rpc("get_dish_tastes", {"p_dish_id": dish["dish_id"]}).execute()
-                dish["taste_options"] = taste_response.data if taste_response.data else []
-                
-                result.append(dish)
             
             print("\n" + "="*80)
             print("聚香园 - 菜品列表")
             print("="*80)
-            print(f"{'菜品ID':<6} {'菜品名称':<10} {'分类':<6} {'价格':<6} {'描述':<30} {'口味选项':<30}")
+            print(f"{'菜品ID':<6} {'菜品名称':<12} {'分类':<6} {'价格':<8} {'描述':<30} {'口味选项':<30}")
             print("-"*80)
             
-            for dish in result:
+            for dish in dishes:
                 taste_info = []
-                for taste in dish["taste_options"]:
+                for taste in dish.get("taste_options", []):
                     required_str = "(必选)" if taste.get("is_required") else "(可选)"
                     taste_info.append(f"{taste['taste_name']}{required_str}")
                 
                 taste_str = " | ".join(taste_info)[:28] + "..." if len(" | ".join(taste_info)) > 30 else " | ".join(taste_info)
                 desc = dish.get("description", "")
                 desc = desc[:28] + "..." if desc and len(desc) > 30 else desc or ""
-                print(f"{dish['dish_id']:<6} {dish['dish_name']:<10} {dish['category_name']:<6} {dish['price']:<6.2f} {desc:<30} {taste_str:<30}")
+                print(f"{dish['dish_id']:<6} {dish['dish_name']:<12} {dish.get('category_name', '未知'):<6} {dish['price']:<8.2f} {desc:<30} {taste_str:<30}")
             
             print("="*80 + "\n")
-            return result
+            return dishes
         except Exception as e:
             print(f"查看菜品失败：{str(e)}")
             return []
@@ -171,12 +141,21 @@ class Customer:
     
     def select_taste_options(self, dish_id: int) -> dict:
         """选择菜品口味"""
-        required_tastes = self.get_dish_required_tastes(dish_id)
-        all_tastes = self._get_all_dish_tastes(dish_id)
+        # 获取菜品所有口味选项
+        dish = get_dish_with_tastes(dish_id)
+        if not dish:
+            print(f"菜品ID {dish_id} 不存在")
+            return {}
+        
+        taste_options = dish.get("taste_options", [])
+        
+        # 分离必选和可选口味
+        required_tastes = [t for t in taste_options if t.get("is_required")]
+        optional_tastes = [t for t in taste_options if not t.get("is_required")]
         
         taste_choices = {}
         
-        print(f"\n请为菜品选择口味：")
+        print(f"\n为菜品 '{dish['dish_name']}' 选择口味：")
         
         # 处理必选口味
         if required_tastes:
@@ -195,7 +174,6 @@ class Customer:
                         print("输入错误！请输入数字类型的口味ID")
         
         # 处理可选口味
-        optional_tastes = [t for t in all_tastes if t['taste_id'] not in [rt['taste_id'] for rt in required_tastes]]
         if optional_tastes:
             print("\n可选口味（输入口味ID选择，多个用逗号分隔，直接回车跳过）：")
             for taste in optional_tastes:
@@ -214,15 +192,6 @@ class Customer:
                         print(f"无效的口味ID：{cid}，已忽略")
         
         return taste_choices
-    
-    def _get_all_dish_tastes(self, dish_id: int) -> list:
-        """获取指定菜品的所有口味选项"""
-        try:
-            response = supabase.rpc("get_dish_tastes", {"p_dish_id": dish_id}).execute()
-            return response.data if response.data else []
-        except Exception as e:
-            print(f"获取菜品口味失败：{str(e)}")
-            return []
     
     def place_order(self, dish_id: int, quantity: int, taste_choices: dict) -> bool:
         """提交订单（点餐/加菜）"""
@@ -255,43 +224,18 @@ class Customer:
             return False
     
     def urge_dish(self, order_item_id: int) -> bool:
-        """催菜"""
+        """催菜 - 简化版"""
         if not self.current_table_id:
             print("请先绑定桌台")
             return False
         
         try:
-            # 检查该菜品是否属于当前桌台
-            # 首先获取订单ID
-            order_response = supabase.table("orders")\
-                .select("order_id")\
-                .eq("table_id", self.current_table_id)\
-                .eq("status", "未结账")\
-                .single()\
-                .execute()
-            
-            if not order_response.data:
-                print("当前桌台无未结账订单")
-                return False
-            
-            order_id = order_response.data["order_id"]
-            
-            # 检查菜品是否属于该订单
-            item_response = supabase.table("order_items")\
-                .select("order_item_id")\
-                .eq("order_id", order_id)\
-                .eq("order_item_id", order_item_id)\
-                .single()\
-                .execute()
-            
-            if not item_response.data:
-                print(f"菜品ID {order_item_id} 不存在或不属于当前桌台")
-                return False
-            
-            # 调用催菜存储过程
-            call_procedure("urge_dish", [order_item_id])
-            print(f"催菜成功！菜品ID：{order_item_id}")
-            return True
+            # 直接调用催菜存储过程
+            result = call_procedure("urge_dish", [order_item_id])
+            if result is not None:
+                print(f"催菜成功！菜品ID：{order_item_id}")
+                return True
+            return False
         except Exception as e:
             print(f"催菜失败：{str(e)}")
             return False
@@ -335,7 +279,7 @@ class Customer:
             print("\n" + "="*80)
             print(f"聚香园 - 桌台 {self.current_table_number} 账单")
             print("="*80)
-            print(f"{'菜品ID':<6} {'菜品名称':<10} {'数量':<4} {'单价':<6} {'小计':<6} {'状态':<6} {'口味':<30}")
+            print(f"{'菜品ID':<6} {'菜品名称':<12} {'数量':<4} {'单价':<6} {'小计':<8} {'状态':<6} {'口味':<30}")
             print("-"*80)
             
             for item in items_response.data:
@@ -359,7 +303,7 @@ class Customer:
                 taste_str = json.dumps(item["taste_choices"], ensure_ascii=False)[:28] + "..." if len(json.dumps(item["taste_choices"], ensure_ascii=False)) > 30 else json.dumps(item["taste_choices"], ensure_ascii=False)
                 refund_display = refund_reason[:8] + "..." if len(refund_reason) > 10 else refund_reason
                 
-                print(f"{item['order_item_id']:<6} {dish_name:<10} {item['quantity']:<4} {item['unit_price']:<6.2f} {item['subtotal']:<6.2f} {item['status']:<6} {taste_str:<30} {refund_display:<10}")
+                print(f"{item['order_item_id']:<6} {dish_name:<12} {item['quantity']:<4} {item['unit_price']:<6.2f} {item['subtotal']:<8.2f} {item['status']:<6} {taste_str:<30}")
                 
                 if item["status"] != "已退菜":
                     total_amount += item["subtotal"]
@@ -372,69 +316,11 @@ class Customer:
             
             final_amount = total_amount * discount
             print("-"*80)
-            print(f"{'':<6} {'':<10} {'':<4} {'':<6} {'折扣率':<6} {discount:<6.2f} {'':<30} {'':<10}")
-            print(f"{'':<6} {'':<10} {'':<4} {'':<6} {'应付金额':<6} {final_amount:<6.2f} {'':<30} {'':<10}")
+            print(f"{'':<6} {'':<12} {'':<4} {'':<6} {'折扣率':<8} {discount:<8.2f} {'':<30}")
+            print(f"{'':<6} {'':<12} {'':<4} {'':<6} {'应付金额':<8} {final_amount:<8.2f} {'':<30}")
             print("="*80 + "\n")
             
             return result
         except Exception as e:
             print(f"查看账单失败：{str(e)}")
             return []
-
-def test_connection() -> bool:
-    """测试数据库连接"""
-    try:
-        response = supabase.table("roles").select("role_id").limit(1).execute()
-        return True
-    except Exception as e:
-        print(f"数据库连接失败：{str(e)}")
-        return False
-
-def execute_sql(sql: str, params: dict = None):
-    """执行SQL语句（支持查询/修改）"""
-    if params is None:
-        params = {}
-    
-    try:
-        # 对于简单的查询，我们可以使用Supabase的查询方法
-        # 这里我们只处理SELECT查询，其他操作通过存储过程或直接操作
-        if sql.strip().upper().startswith("SELECT"):
-            # 直接使用Supabase客户端执行简单查询
-            # 注意：这种方法只适用于简单查询，复杂查询可能需要使用视图或存储过程
-            table_match = ["tables", "users", "dishes", "orders", "order_items"]
-            for table in table_match:
-                if table in sql.lower():
-                    response = supabase.table(table).select("*").execute()
-                    return response.data
-            
-            # 如果没有匹配的表，返回空列表
-            return []
-        else:
-            print(f"不支持的非SELECT查询: {sql}")
-            return None
-    except Exception as e:
-        print(f"SQL执行失败：{str(e)}")
-        return None
-
-def call_procedure(proc_name: str, params: list = None):
-    """调用存储过程"""
-    if params is None:
-        params = []
-    
-    try:
-        # 将参数转换为字典格式
-        params_dict = {}
-        for i, param in enumerate(params):
-            params_dict[f"p_{i+1}"] = param
-        
-        # 调用存储过程
-        response = supabase.rpc(proc_name, params_dict).execute()
-        return response.data
-    except Exception as e:
-        print(f"存储过程调用失败：{str(e)}")
-        return None
-
-# 初始化连接
-if not test_connection():
-    raise Exception("数据库连接失败，请检查配置")
-print("数据库连接成功！")

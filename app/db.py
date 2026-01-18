@@ -1,7 +1,8 @@
 from supabase import create_client, Client
 import os
+from datetime import datetime
 
-# Supabase配置（替换为你的实际配置）
+# Supabase配置（建议改为环境变量）
 SUPABASE_URL = "https://lkadifukazgphwzkfuez.supabase.co"
 SUPABASE_KEY = "sb_secret_71F1tqMywPNfvbxK9lUj_g_-QMiHOHJ"
 
@@ -18,35 +19,81 @@ def test_connection() -> bool:
         return False
 
 def execute_sql(sql: str, params: dict = None):
-    """执行SQL语句（支持查询/修改）"""
-    if params is None:
-        params = {}
-    
+    """执行SQL语句（支持查询/修改）- 修复版"""
     try:
-        # 对于简单的查询，我们可以使用Supabase的查询方法
-        # 这里我们只处理SELECT查询，其他操作通过存储过程或直接操作
         if sql.strip().upper().startswith("SELECT"):
-            # 直接使用Supabase客户端执行查询
-            # 注意：这种方法只适用于简单查询，复杂查询可能需要使用视图或存储过程
-            response = supabase.table("tables").select("*").execute()
-            return response.data
+            import re
+            # 提取表名（简化处理）
+            table_match = re.search(r'FROM\s+(\w+)', sql, re.IGNORECASE)
+            if table_match:
+                table_name = table_match.group(1)
+                # 如果是视图
+                if '_view' in table_name.lower():
+                    return supabase.from_(table_name).select("*").execute().data
+                # 普通表
+                else:
+                    return supabase.table(table_name).select("*").execute().data
+            
+            # 视图查询
+            view_match = re.search(r'FROM\s+(\w+_view)', sql, re.IGNORECASE)
+            if view_match:
+                view_name = view_match.group(1)
+                return supabase.from_(view_name).select("*").execute().data
+            
+            # 其他复杂查询
+            print(f"复杂查询建议使用视图或存储过程: {sql[:100]}...")
+            return []
         else:
-            print(f"不支持的非SELECT查询: {sql}")
+            print(f"非SELECT查询建议使用相应方法: {sql[:100]}...")
             return None
     except Exception as e:
         print(f"SQL执行失败：{str(e)}")
         return None
 
 def call_procedure(proc_name: str, params: list = None):
-    """调用存储过程"""
+    """调用存储过程 - 修复版（修正参数映射顺序和名称）"""
     if params is None:
         params = []
     
     try:
-        # 将参数转换为字典格式
+        # 构建参数字典（严格匹配存储过程定义的参数顺序和名称）
         params_dict = {}
-        for i, param in enumerate(params):
-            params_dict[f"p_{i+1}"] = param
+        
+        if proc_name == "open_table":
+            # 存储过程定义：p_table_id, p_created_by, OUT p_order_id
+            if len(params) >= 2:
+                params_dict["p_table_id"] = params[0]
+                params_dict["p_created_by"] = params[1]
+        elif proc_name == "place_order":
+            # 存储过程定义：p_table_id, p_created_by, p_dish_list, OUT p_order_id
+            if len(params) >= 3:
+                params_dict["p_table_id"] = params[0]
+                params_dict["p_created_by"] = params[1]
+                params_dict["p_dish_list"] = params[2]
+        elif proc_name == "settle_bill":
+            # 存储过程定义：p_table_id, p_discount
+            if len(params) >= 2:
+                params_dict["p_table_id"] = params[0]
+                params_dict["p_discount"] = params[1]
+        elif proc_name == "refund_dish":
+            # 存储过程定义：p_order_item_id, p_refund_reason, p_refunded_by
+            if len(params) >= 3:
+                params_dict["p_order_item_id"] = params[0]
+                params_dict["p_refund_reason"] = params[1]
+                params_dict["p_refunded_by"] = params[2]
+        elif proc_name == "urge_dish":
+            # 存储过程定义：p_order_item_id
+            if len(params) >= 1:
+                params_dict["p_order_item_id"] = params[0]
+        elif proc_name == "update_dish_status":
+            # 存储过程定义：p_order_item_id, p_new_status
+            if len(params) >= 2:
+                params_dict["p_order_item_id"] = params[0]
+                params_dict["p_new_status"] = params[1]
+        else:
+            # 通用参数映射
+            for i, param in enumerate(params):
+                params_dict[f"p{i+1}"] = param
         
         # 调用存储过程
         response = supabase.rpc(proc_name, params_dict).execute()
@@ -55,9 +102,9 @@ def call_procedure(proc_name: str, params: list = None):
         print(f"存储过程调用失败：{str(e)}")
         return None
 
-# ---------------------- 新增辅助查询方法（优化顾客端体验）----------------------
+# ---------------------- 辅助查询方法 ----------------------
 def get_available_tables() -> list:
-    """获取所有空闲桌台（供顾客选择）"""
+    """获取所有空闲桌台"""
     try:
         response = supabase.table("tables")\
             .select("table_id, table_number, table_type, capacity")\
@@ -71,10 +118,9 @@ def get_available_tables() -> list:
         return []
 
 def get_all_active_dishes() -> list:
-    """获取所有上架菜品及对应的口味选项（含必选标记）"""
+    """获取所有上架菜品及对应的口味选项"""
     try:
-        # 由于复杂查询，我们使用多个查询组合
-        # 首先获取所有上架菜品
+        # 获取菜品
         dishes_response = supabase.table("dishes")\
             .select("dish_id, dish_name, category_id, price, description, sort_order")\
             .eq("is_active", True)\
@@ -86,10 +132,8 @@ def get_all_active_dishes() -> list:
         
         dishes = dishes_response.data
         
-        # 为每个菜品获取分类信息和口味选项
-        result = []
+        # 获取分类信息
         for dish in dishes:
-            # 获取分类信息
             category_response = supabase.table("dish_categories")\
                 .select("category_name")\
                 .eq("category_id", dish["category_id"])\
@@ -98,6 +142,8 @@ def get_all_active_dishes() -> list:
             
             if category_response.data:
                 dish["category_name"] = category_response.data["category_name"]
+            else:
+                dish["category_name"] = "未知分类"
             
             # 获取口味选项
             taste_response = supabase.rpc("get_dish_tastes", {"p_dish_id": dish["dish_id"]}).execute()
@@ -105,22 +151,44 @@ def get_all_active_dishes() -> list:
                 dish["taste_options"] = taste_response.data
             else:
                 dish["taste_options"] = []
-            
-            result.append(dish)
         
-        return result
+        return dishes
     except Exception as e:
         print(f"查询菜品失败：{str(e)}")
         return []
 
-def get_dish_required_tastes(dish_id: int) -> list:
-    """获取指定菜品的必选口味"""
+def get_dish_with_tastes(dish_id: int) -> dict:
+    """获取菜品详情（含口味选项）"""
     try:
-        response = supabase.rpc("get_required_tastes", {"p_dish_id": dish_id}).execute()
-        return response.data
+        # 获取菜品基本信息
+        dish_response = supabase.table("dishes")\
+            .select("*")\
+            .eq("dish_id", dish_id)\
+            .single()\
+            .execute()
+        
+        if not dish_response.data:
+            return None
+        
+        dish = dish_response.data
+        
+        # 获取分类名
+        category_response = supabase.table("dish_categories")\
+            .select("category_name")\
+            .eq("category_id", dish["category_id"])\
+            .single()\
+            .execute()
+        
+        dish["category_name"] = category_response.data["category_name"] if category_response.data else "未知分类"
+        
+        # 获取口味选项
+        taste_response = supabase.rpc("get_dish_tastes", {"p_dish_id": dish_id}).execute()
+        dish["taste_options"] = taste_response.data if taste_response.data else []
+        
+        return dish
     except Exception as e:
-        print(f"查询必选口味失败：{str(e)}")
-        return []
+        print(f"获取菜品详情失败：{str(e)}")
+        return None
 
 # 初始化连接
 if not test_connection():

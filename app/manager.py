@@ -15,7 +15,7 @@ class Manager:
     def view_dishes(self, category_id: int = None):
         """查看菜品列表"""
         try:
-            # 使用 Supabase 客户端直接查询，而不是使用 execute_sql
+            # 使用Supabase客户端直接查询
             query = supabase.table("dishes").select("""
                 dish_id, dish_name, category_id, price, description, is_active, sort_order,
                 dish_categories!inner(category_name)
@@ -50,28 +50,32 @@ class Manager:
             return None
 
     def add_dish(self, dish_name: str, category_id: int, price: float, description: str = "", sort_order: int = 0):
-        """添加新菜品"""
-        # 检查菜品是否已存在
-        exists = supabase.table("dishes").select("dish_id").eq("dish_name", dish_name).single().execute()
-        if exists.data:
-            print(f"菜品 {dish_name} 已存在，无法重复添加")
+        """添加新菜品（修复查询结果为空的处理）"""
+        try:
+            # 检查菜品是否已存在（使用execute()而非single()，避免无结果时抛出异常）
+            exists_response = supabase.table("dishes").select("dish_id").eq("dish_name", dish_name).execute()
+            if exists_response.data:
+                print(f"菜品 {dish_name} 已存在，无法重复添加")
+                return False
+            
+            # 插入菜品
+            response = supabase.table("dishes").insert({
+                "dish_name": dish_name,
+                "category_id": category_id,
+                "price": price,
+                "description": description,
+                "sort_order": sort_order,
+                "is_active": True
+            }).execute()
+            
+            if response.data:
+                dish_id = response.data[0]["dish_id"]
+                print(f"添加成功！菜品ID：{dish_id}，菜品名称：{dish_name}")
+                return dish_id
             return False
-        
-        # 插入菜品
-        response = supabase.table("dishes").insert({
-            "dish_name": dish_name,
-            "category_id": category_id,
-            "price": price,
-            "description": description,
-            "sort_order": sort_order,
-            "is_active": True
-        }).execute()
-        
-        if response.data:
-            dish_id = response.data[0]["dish_id"]
-            print(f"添加成功！菜品ID：{dish_id}，菜品名称：{dish_name}")
-            return dish_id
-        return False
+        except Exception as e:
+            print(f"添加菜品失败：{str(e)}")
+            return False
 
     def delete_dish(self, dish_id: int):
         """下架菜品（逻辑删除）"""
