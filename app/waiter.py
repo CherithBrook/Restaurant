@@ -23,10 +23,11 @@ class Waiter:
             print(f"桌台{table_number}当前状态为{table_response.data['status']}，无法开台")
             return -1
 
-        # 调用开台存储过程
+        # 调用开台函数
         result = call_procedure("open_table", [table_id, self.user_id])
-        if result:
-            order_id = result[0]["p_order_id"]
+        if result is not None:
+            # FUNCTION 直接返回订单ID
+            order_id = result if isinstance(result, int) else result
             print(f"开台成功！桌台：{table_number}，订单ID：{order_id}")
             return order_id
         return None
@@ -40,11 +41,11 @@ class Waiter:
             return None
         table_id = table_response.data["table_id"]
 
-        # 调用点餐存储过程
-        dish_list_json = json.dumps(dish_list)
-        result = call_procedure("place_order", [table_id, self.user_id, dish_list_json])
-        if result:
-            order_id = result[0]["p_order_id"]
+        # 调用点餐函数（直接传列表，Supabase会自动处理JSON序列化）
+        result = call_procedure("place_order", [table_id, self.user_id, dish_list])
+        if result is not None:
+            # FUNCTION 直接返回订单ID
+            order_id = result if isinstance(result, int) else result
             print(f"代客点餐成功！订单ID：{order_id}")
             return order_id
         return None
@@ -101,6 +102,42 @@ class Waiter:
             print(f"{table['table_number']:<8} {table['table_type']:<8} {table['capacity']:<4} {table['status']:<8}")
         print("="*60 + "\n")
         return response.data
+
+    def clear_table(self, table_number: str) -> bool:
+        """清台 - 将桌台从待清理状态恢复为空闲"""
+        try:
+            # 获取桌台信息
+            table_response = supabase.table("tables").select("table_id", "status").eq("table_number", table_number).single().execute()
+            if not table_response.data:
+                print(f"桌台 {table_number} 不存在！")
+                return False
+            
+            table_id = table_response.data["table_id"]
+            current_status = table_response.data["status"]
+            
+            # 检查桌台状态
+            if current_status == "空闲":
+                print(f"桌台 {table_number} 已经是空闲状态，无需清台")
+                return False
+            elif current_status == "占用":
+                print(f"桌台 {table_number} 正在使用中，请先结账再清台")
+                return False
+            
+            # 更新桌台状态为空闲
+            update_response = supabase.table("tables").update({
+                "status": "空闲",
+                "updated_at": "now()"
+            }).eq("table_id", table_id).execute()
+            
+            if update_response.data:
+                print(f"清台成功！桌台 {table_number} 已恢复空闲状态")
+                return True
+            else:
+                print(f"清台失败！")
+                return False
+        except Exception as e:
+            print(f"清台失败：{str(e)}")
+            return False
 
 # 示例用法
 if __name__ == "__main__":

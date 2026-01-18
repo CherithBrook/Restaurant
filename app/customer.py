@@ -59,9 +59,9 @@ class Customer:
                 print(f"桌台 {table_response.data['table_number']} 当前状态为 {table_response.data['status']}，无法绑定")
                 return False
             
-            # 调用开台存储过程
+            # 调用开台函数
             result = call_procedure("open_table", [table_id, self.user_id])
-            if result:
+            if result is not None:
                 self.current_table_id = table_id
                 self.current_table_number = table_response.data["table_number"]
                 print(f"绑定成功！当前桌台：{self.current_table_number}")
@@ -208,12 +208,12 @@ class Customer:
                     "taste_choices": taste_choices
                 }
             ]
-            dish_list_json = json.dumps(dish_list)
             
-            # 调用点餐存储过程
-            result = call_procedure("place_order", [self.current_table_id, self.user_id, dish_list_json])
-            if result:
-                order_id = result[0]["p_order_id"]
+            # 调用点餐函数（直接传列表，Supabase会自动处理JSON序列化）
+            result = call_procedure("place_order", [self.current_table_id, self.user_id, dish_list])
+            if result is not None:
+                # FUNCTION 直接返回订单ID
+                order_id = result if isinstance(result, int) else result
                 print(f"点餐成功！订单ID：{order_id}")
                 return True
             else:

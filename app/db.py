@@ -1,5 +1,6 @@
 from supabase import create_client, Client
 import os
+import json
 from datetime import datetime
 
 # Supabase配置（建议改为环境变量）
@@ -65,11 +66,16 @@ def call_procedure(proc_name: str, params: list = None):
                 params_dict["p_table_id"] = params[0]
                 params_dict["p_created_by"] = params[1]
         elif proc_name == "place_order":
-            # 存储过程定义：p_table_id, p_created_by, p_dish_list, OUT p_order_id
+            # 函数定义：p_table_id, p_created_by, p_dish_list TEXT（将在函数内转为JSONB）
             if len(params) >= 3:
                 params_dict["p_table_id"] = params[0]
                 params_dict["p_created_by"] = params[1]
-                params_dict["p_dish_list"] = params[2]
+                # 传递 JSON 字符串
+                dish_list = params[2]
+                if isinstance(dish_list, str):
+                    params_dict["p_dish_list"] = dish_list
+                else:
+                    params_dict["p_dish_list"] = json.dumps(dish_list, ensure_ascii=False)
         elif proc_name == "settle_bill":
             # 存储过程定义：p_table_id, p_discount
             if len(params) >= 2:

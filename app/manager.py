@@ -79,12 +79,26 @@ class Manager:
 
     def delete_dish(self, dish_id: int):
         """下架菜品（逻辑删除）"""
-        response = supabase.table("dishes").update({"is_active": False}).eq("dish_id", dish_id).execute()
-        if response.count > 0:
-            print(f"下架成功！菜品ID：{dish_id}")
-            return True
-        print(f"下架失败！菜品ID：{dish_id} 不存在或已下架")
-        return False
+        try:
+            # 先检查菜品是否存在且未下架
+            check_response = supabase.table("dishes").select("dish_id, is_active").eq("dish_id", dish_id).execute()
+            if not check_response.data:
+                print(f"下架失败！菜品ID：{dish_id} 不存在")
+                return False
+            if not check_response.data[0].get("is_active", False):
+                print(f"下架失败！菜品ID：{dish_id} 已经下架")
+                return False
+            
+            # 执行下架
+            response = supabase.table("dishes").update({"is_active": False}).eq("dish_id", dish_id).execute()
+            if response.data:
+                print(f"下架成功！菜品ID：{dish_id}")
+                return True
+            print(f"下架失败！菜品ID：{dish_id}")
+            return False
+        except Exception as e:
+            print(f"下架菜品失败：{str(e)}")
+            return False
 
     # 桌台管理
     def manage_tables(self, table_number: str = None):

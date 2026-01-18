@@ -142,6 +142,7 @@ def waiter_menu(waiter: Waiter):
         print("3. 代客点餐/加菜")
         print("4. 退菜")
         print("5. 结账")
+        print("6. 清台")
         print("0. 返回上一级")
         print("-"*30)
         choice = input("请输入操作编号：")
@@ -223,6 +224,9 @@ def waiter_menu(waiter: Waiter):
                 waiter.settle_bill(table_number, float(discount))
             except ValueError:
                 print("输入错误！折扣率必须是数字")
+        elif choice == "6":
+            table_number = input("请输入要清理的桌台号：")
+            waiter.clear_table(table_number)
         elif choice == "0":
             break
         else:
