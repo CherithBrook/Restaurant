@@ -100,8 +100,9 @@ class Customer:
     def view_all_dishes(self) -> list:
         """查看所有上架菜品及口味选项"""
         try:
-            # 使用db.py中的辅助函数
-            dishes = get_dish_with_tastes(None)
+            # 使用db.py中的辅助函数获取所有上架菜品
+            from db import get_all_active_dishes
+            dishes = get_all_active_dishes()
             
             if not dishes:
                 print("暂无上架菜品")
